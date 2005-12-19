@@ -1,0 +1,223 @@
+#!/bin/bash
+
+# *******************************************
+# *                                         *
+# *	Based on the windows verion	Modified	*
+# * to work on OS X       					*
+# * by theGnome - www.underpantsgnome.com   *
+# *                                         *
+# * Original info:                          *
+# * ReplayTV 2 PSP Video conversion program *
+# *                                         *
+# * v1.3                                    *
+# * Created by R. Fontenot, Copyright 2005  *
+# * For AV Science Forum members            *
+# *                                         *
+# *******************************************
+
+# these all need to match your local file locations, case sensitive
+# location of ffmpeg, if you leave this as is it will use the bundled ffmpeg
+#FFMPEG="/Applications/Local/Forty-TwoDVD-VXPlus.app/Contents/Resources/ffmpeg"
+
+# location of rvt tools evtdump
+EVTDUMP="/Applications/Replay/rev4/bin/osx/evtdump"
+
+# location of rvt tools rtvedit
+RTVEDIT="/Applications/Replay/rev4/bin/osx/rtvedit"
+
+# where you want the logs to go
+LOGDIR="$HOME/Desktop/rtv2psp"
+
+# where you want to keep the files after conversion
+PSPVIDEOS="/Users/Shared/PSP_Videos"
+
+# where your PSP mounts
+PSPDRV="/Volumes/psp"
+
+# these all need to be lowercase
+# output quality use high, meduim, low or lowest
+QUALITY="medium"
+
+# provides better quality, setting this to no will speed up the process
+USE2PASS="no"
+
+# copy to PSP on completion
+COPY2PSP="yes"
+
+# strip commercials?
+EDIT="no"
+
+# use growl for status updates
+USEGROWL="yes"
+
+# how many minutes to wait for the PSP before giving up
+MAXTRIES=30
+
+######
+# Shouldn't need to edit beolw this point
+######
+FILENAME=99999
+TRIES=0
+JOBID=$RANDOM
+MYDIR=`dirname $0`
+
+# if it wasn't set above
+if [ ! $FFMPEG ]
+then
+	FFMPEG="$MYDIR/ffmpeg"
+fi
+
+# incoming looks like /Volumes/something/Replay/Some Title.mpg
+SOURCE=$*
+SOURCEDIR=`dirname "$SOURCE"`
+TITLE=`basename -s .mpg "$SOURCE"`
+EVTFILE="$SOURCEDIR/$TITLE.evt"
+
+
+## logging function, handles file log and growl if installed and enabled
+log() {
+	if [ "$1" ]
+	then
+		if [ ! -d $LOGDIR ]
+		then
+			`mkdir -p "$LOGDIR"`
+			log "Created log directory "$LOGDIR""
+		fi
+
+		DATE_TIME=`date`
+		echo "$DATE_TIME: $JOBID - "$1"" >> $LOGDIR/rtv2psp.log 2>&1
+
+		if [ $USEGROWL == "yes" ]
+		then
+			echo ""$1"" | `$MYDIR/growlnotify 'ReplayTV to PSP' -a DVArchive > /dev/null 2>&1`
+		fi
+	fi
+}
+
+## look to see if there is a PSP mounted
+check4psp() {
+	if [ $TRIES -ge $MAXTRIES ]
+	then
+		log "Unable to find a PSP, giving up"
+		exit
+	else
+		let "TRIES += 1"
+	fi
+
+	log "Checking for a PSP"
+
+	if [ -f $PSPDRV/MEMSTICK.IND ]
+	then
+		check4file
+	else
+		sleep 60
+		check4psp
+	fi
+}
+
+## loop from 9999 down to look for an empty slot for the video
+check4file() {
+	PSPFILE="M4V$FILENAME"
+
+	if [ -f "$PSPDRV/MP_ROOT/100MNV01/$PSPFILE.MP4" ]
+	then
+		let "FILENAME -= 1"
+		check4file
+	fi
+
+	log "Copying file to PSP"
+	cp -f "$PSPVIDEOS/$TITLE.MP4" "$PSPDRV/MP_ROOT/100MNV01/$PSPFILE.MP4" >> $LOGDIR/rtv2psp.log 2>&1
+	cp -f "$PSPVIDEOS/$TITLE.THM" "$PSPDRV/MP_ROOT/100MNV01/$PSPFILE.THM" >> $LOGDIR/rtv2psp.log 2>&1
+}
+
+## setup video settings
+SIZE="320x240"
+VBITRATE="768"
+MUXVB=
+MINRATE=
+MAXRATE=
+VBRT=
+FRAMERATE="29.97"
+ABITRATE="64"
+VOLUME="130"
+
+case "$QUALITY" in
+	"medium" )
+		SIZE="320x240"
+		VBITRATE="512"
+		MUXVB=
+		MINRATE="-minrate 32"
+		MAXRATE="-maxrate 600"
+		VBRT="-bt 16"
+		FRAMERATE="29.97"
+		ABITRATE="48"
+		VOLUME="130"
+	;;
+
+	"low" )
+		SIZE="320x240"
+		VBITRATE="384"
+		MUXVB=
+		MINRATE="-minrate 32"
+		MAXRATE="-maxrate 400"
+		VBRT="-bt 16"
+		FRAMERATE="29.97"
+		ABITRATE="48"
+		VOLUME="130"
+	;;
+
+	"lowest" )
+		SIZE="320x240"
+		VBITRATE="216"
+		MUXVB=
+		MINRATE="-minrate 32"
+		MAXRATE="-maxrate 300"
+		VBRT="-bt 16"
+		FRAMERATE="14.985"
+		ABITRATE="48"
+		VOLUME="130"
+	;;
+esac
+
+## strip commercials, if enabled, damn this makes the files small
+if [ $EDIT == "yes" ]
+then
+	log "$TITLE - Edit File";
+	$EVTDUMP "$EVTFILE" | "$RTVEDIT" >> $LOGDIR/rtv2psp.log 2>&1
+	SOURCE="$SOURCEDIR/${TITLE}1.mpg"
+fi
+
+## create otput dir if it doesn't exist
+if [ ! -d $PSPVIDEOS ]
+	then
+	`mkdir -p "$PSPVIDEOS"`
+	log "Created destination directory "$PSPVIDEOS""
+fi
+
+#log "$TITLE - Conversion started";
+log "$TITLE - Transcoding to MP4 - 1st pass"
+`$FFMPEG -y -i "$SOURCE" -title "$TITLE" -bitexact -vcodec xvid -s $SIZE -b $VBITRATE $MUXVB $MINRATE $MAXRATE $VBRT -r $FRAMERATE -pass 1 -passlogfile $LOGDIR/2pass -acodec aac -ac 2 -ab $ABITRATE -ar 24000 -vol $VOLUME -f psp "$PSPVIDEOS/$TITLE.MP4"`
+
+# do second pass
+if [ $USE2PASS == "yes" ]
+then
+	log "$TITLE - Transcoding to MP4 - 2nd pass"
+	`$FFMPEG -y -i "$SOURCE" -title "$TITLE" -bitexact -vcodec xvid -s $SIZE -b $VBITRATE $MUXVB $MINRATE $MAXRATE $VBRT -r $FRAMERATE -pass 2 -passlogfile $LOGDIR/2pass -acodec aac -ac 2 -ab $ABITRATE -ar 24000 -vol $VOLUME -f psp "$PSPVIDEOS/$TITLE.MP4"`
+fi
+
+# create a pretty thumbnail
+log "$TITLE - Generating Thumbnail"
+`$FFMPEG -y -i "$SOURCE" -f mjpeg -ss 5 -vframes 1 -s 160x120 -an "$PSPVIDEOS/$TITLE.THM"`
+
+log "$TITLE - Transcoding to MP4 - Complete"
+
+## put it on the PSP
+if [ $COPY2PSP == "yes" ]
+then
+	check4psp
+fi
+
+## clean up temp logs
+`rm -f "$LOGDIR/2pass*"`
+
+log "$TITLE - Conversion completed"
